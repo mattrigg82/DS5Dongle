@@ -62,10 +62,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view gpio-v072-test >/dev/null 2>&1 || \
-            gh release create gpio-v072-test --prerelease \
+          gh release view gpio-v072-test --repo mattrigg82/DS5Dongle >/dev/null 2>&1 || \
+            gh release create gpio-v072-test --repo mattrigg82/DS5Dongle --prerelease \
               --title "GP12 LED and GP13 button test build" \
               --notes "Linux CI build based on awalol v0.7.2-hotfix."
-          gh release upload gpio-v072-test \
+          gh release upload gpio-v072-test --repo mattrigg82/DS5Dongle \
             'build/gpio/ds5-bridge.uf2#DS5Dongle-v0.7.2-hotfix-GP12-GP13-linux.uf2' \
             --clobber
