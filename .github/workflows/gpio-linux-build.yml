@@ -1,0 +1,57 @@
+name: Build GP12 LED and GP13 button firmware
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/gpio-linux-build.yml
+      - gpio-v072.patch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out awalol release source
+        uses: actions/checkout@v5
+        with:
+          repository: awalol/DS5Dongle
+          ref: v0.7.2-hotfix
+          submodules: recursive
+
+      - name: Apply GP12 and GP13 patch
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/mattrigg82/DS5Dongle/master/gpio-v072.patch -o gpio-v072.patch
+          git apply --check gpio-v072.patch
+          git apply gpio-v072.patch
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build python3 build-essential curl xz-utils
+
+      - name: Install ARM toolchain 14.2
+        run: |
+          curl -fsSL https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz -o /tmp/arm.tar.xz
+          mkdir -p "$RUNNER_TEMP/arm-toolchain"
+          tar -xJf /tmp/arm.tar.xz -C "$RUNNER_TEMP/arm-toolchain" --strip-components=1
+          echo "$RUNNER_TEMP/arm-toolchain/bin" >> "$GITHUB_PATH"
+
+      - name: Install Pico SDK 2.2.0 and TinyUSB 0.20.0
+        run: |
+          git clone --depth 1 --branch 2.2.0 https://github.com/raspberrypi/pico-sdk.git "$RUNNER_TEMP/pico-sdk"
+          git -C "$RUNNER_TEMP/pico-sdk" submodule update --init --recursive
+          git -C "$RUNNER_TEMP/pico-sdk/lib/tinyusb" fetch --depth 1 origin refs/tags/0.20.0:refs/tags/0.20.0
+          git -C "$RUNNER_TEMP/pico-sdk/lib/tinyusb" checkout --detach 0.20.0
+
+      - name: Build Pico 2 W release firmware
+        run: |
+          cmake -S . -B build/gpio -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$RUNNER_TEMP/pico-sdk" \
+            -DVERSION=v0.7.2-hotfix-gp12-gp13-linux
+          cmake --build build/gpio --target ds5-bridge
+
+      - name: Upload UF2
+        uses: actions/upload-artifact@v4
+        with:
+          name: DS5Dongle-v0.7.2-hotfix-GP12-GP13-linux
+          path: build/gpio/ds5-bridge.uf2
+          if-no-files-found: error
