@@ -1,0 +1,212 @@
+diff --git a/src/battery_led.cpp b/src/battery_led.cpp
+index 3a0c512..b339e45 100644
+--- a/src/battery_led.cpp
++++ b/src/battery_led.cpp
+@@ -7,6 +7,7 @@
+ #include <cstdint>
+ 
+ #include "config.h"
++#include "external_gpio.h"
+ #include "pico/cyw43_arch.h"
+ #include "pico/time.h"
+ 
+@@ -47,6 +48,7 @@ void battery_led_on_disconnect(void) {
+     last_report_us = 0;
+     last_toggle_us = 0;
+     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
++    ds5_external_led_state = false;
+ }
+ 
+ void battery_led_tick(void) {
+@@ -59,6 +61,7 @@ void battery_led_tick(void) {
+             blinking = false;
+             led_state = false;
+             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
++            ds5_external_led_state = false;
+         }
+         return;
+     }
+@@ -75,17 +78,20 @@ void battery_led_tick(void) {
+             led_state = true;
+             last_toggle_us = now;
+             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
++            ds5_external_led_state = true;
+             return;
+         }
+         if ((now - last_toggle_us) >= BLINK_PERIOD_US) {
+             led_state = !led_state;
+             last_toggle_us = now;
+             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_state);
++            ds5_external_led_state = led_state;
+         }
+     } else if (blinking) {
+         blinking = false;
+         // Battery recovered or now charging — restore steady-state LED per the user
+         // preference flag (LED off when disabled, otherwise the bt.cpp connected = on state).
+         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, !get_config().disable_pico_led);
++        ds5_external_led_state = !get_config().disable_pico_led;
+     }
+ }
+diff --git a/src/bt.cpp b/src/bt.cpp
+index 80bedb2..8ec104d 100644
+--- a/src/bt.cpp
++++ b/src/bt.cpp
+@@ -17,6 +17,7 @@
+ #include "bsp/board_api.h"
+ #include "classic/sdp_server.h"
+ #include "config.h"
++#include "external_gpio.h"
+ #include "state_mgr.h"
+ #include "dse.h"
+ #include "wake.h"
+@@ -347,6 +348,7 @@ void bt_inquiring_led() {
+             bt_clear_flash_last_toggle_ms = now;
+             bt_clear_flash_toggles_remaining--;
+             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, (bt_clear_flash_toggles_remaining % 2) == 1);
++            ds5_external_led_state = (bt_clear_flash_toggles_remaining % 2) == 1;
+         }
+         return;
+     }
+@@ -358,6 +360,7 @@ void bt_inquiring_led() {
+     if (!bt_inquiring) {
+         if (led_status) {
+             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
++            ds5_external_led_state = false;
+         }
+         return;
+     }
+@@ -366,6 +369,7 @@ void bt_inquiring_led() {
+         last_time = time_us_32();
+         led_status = !led_status;
+         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_status);
++        ds5_external_led_state = led_status;
+     }
+ }
+ 
+@@ -614,6 +618,7 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
+             hid_interrupt_cid = 0;
+             while (queue_try_remove(&send_fifo, NULL)) {}
+             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
++            ds5_external_led_state = false;
+ #if ENABLE_BATT_LED
+             battery_led_on_disconnect();
+ #endif
+@@ -725,6 +730,7 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
+ 
+                     if (!get_config().disable_pico_led) {
+                         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
++                        ds5_external_led_state = true;
+                     }
+                     inactive_time = get_absolute_time();
+ 
+diff --git a/src/button_functions.cpp b/src/button_functions.cpp
+index 046cc3d..9bae4b5 100644
+--- a/src/button_functions.cpp
++++ b/src/button_functions.cpp
+@@ -7,6 +7,7 @@
+ #include <cstdio>
+ 
+ #include "bt.h"
++#include "external_gpio.h"
+ #include "pico/time.h"
+ #include "pico/flash.h"
+ #include "hardware/gpio.h"
+@@ -99,7 +100,7 @@ void button_check() {
+ 
+     bt_blacklist_persist_if_dirty();
+ 
+-    bool pressed = button_read_bootsel();
++    bool pressed = !gpio_get(DS5_EXTERNAL_BUTTON_PIN) || button_read_bootsel();
+ 
+     switch (button_fsm) {
+         case 0: // IDLE - wait for the first press
+diff --git a/src/config.cpp b/src/config.cpp
+index 3affd09..9387f86 100644
+--- a/src/config.cpp
++++ b/src/config.cpp
+@@ -8,6 +8,7 @@
+ #include <cstring>
+ 
+ #include "state_mgr.h"
++#include "external_gpio.h"
+ #include "utils.h"
+ #include "hardware/flash.h"
+ #include "hardware/sync.h"
+@@ -162,8 +163,10 @@ void set_config(const uint8_t *new_config, const uint16_t len) {
+     config_valid();
+     if (config.body.disable_pico_led) {
+         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
++        ds5_external_led_state = false;
+     }else {
+         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
++        ds5_external_led_state = true;
+     }
+     set_volume(config.body.speaker_volume,config.body.headset_volume);
+     if (config.body.speaker_gain != 0) {
+diff --git a/src/external_gpio.h b/src/external_gpio.h
+new file mode 100644
+index 0000000..b385f91
+--- /dev/null
++++ b/src/external_gpio.h
+@@ -0,0 +1,8 @@
++#ifndef DS5_EXTERNAL_GPIO_H
++#define DS5_EXTERNAL_GPIO_H
++
++constexpr unsigned int DS5_EXTERNAL_LED_PIN = 12;
++constexpr unsigned int DS5_EXTERNAL_BUTTON_PIN = 13;
++inline volatile bool ds5_external_led_state = false;
++
++#endif
+diff --git a/src/main.cpp b/src/main.cpp
+index f81163d..bba78b3 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -14,6 +14,7 @@
+ #include "ps_shortcut.h"
+ #endif
+ #include "hardware/clocks.h"
++#include "hardware/gpio.h"
+ #include "hardware/vreg.h"
+ #include "hardware/watchdog.h"
+ #include "pico/cyw43_arch.h"
+@@ -24,6 +25,7 @@
+ #include "config.h"
+ #include "cmd.h"
+ #include "dse.h"
++#include "external_gpio.h"
+ #if ENABLE_BATT_LED
+ #include "battery_led.h"
+ #endif
+@@ -275,7 +277,13 @@ int main() {
+         printf("Failed to initialize CYW43\n");
+         return 1;
+     }
++    gpio_init(DS5_EXTERNAL_LED_PIN);
++    gpio_set_dir(DS5_EXTERNAL_LED_PIN, GPIO_OUT);
++    gpio_init(DS5_EXTERNAL_BUTTON_PIN);
++    gpio_set_dir(DS5_EXTERNAL_BUTTON_PIN, GPIO_IN);
++    gpio_pull_up(DS5_EXTERNAL_BUTTON_PIN);
+     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
++    ds5_external_led_state = false;
+ 
+ #if ENABLE_BATT_LED
+     battery_led_init();
+@@ -288,8 +296,10 @@ int main() {
+         for (int i = 0; i < 6; i++) {
+             if (i % 2 == 0) {
+                 cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
++                ds5_external_led_state = true;
+             } else {
+                 cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
++                ds5_external_led_state = false;
+             }
+             sleep_ms(500);
+         }
+@@ -320,6 +330,7 @@ int main() {
+ #endif
+         cyw43_arch_poll();
+         tud_task();
++        gpio_put(DS5_EXTERNAL_LED_PIN, ds5_external_led_state);
+         wake_task();
+         audio_loop();
+         interrupt_loop();
